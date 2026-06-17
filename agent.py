@@ -1,7 +1,8 @@
 """
 Meeting Prep Agent — Zalopay BD/AM
-Input: ten_merchant + segment
-Output: tin tuc merchant, talking points, cau hoi goi y
+Input: merchant + segment + deal_stage
+Output: tổng quan, talking points, câu hỏi gợi ý,
+        objection handling, pain point → product mapping
 """
 
 import argparse
@@ -44,11 +45,33 @@ SEGMENT_SEARCH_FOCUS = {
     "government_public":  "dịch vụ công chính phủ eGov thuế hành chính",
 }
 
+DEAL_STAGES = {
+    "cold":      "Lần đầu tiếp cận",
+    "follow_up": "Follow-up / Đang đàm phán",
+    "renewal":   "Gia hạn / Upsell",
+}
+
+DEAL_STAGE_NOTES = {
+    "cold":      "tập trung khám phá, xây dựng trust, câu hỏi mở về hiện trạng",
+    "follow_up": "giải quyết băn khoăn cụ thể, trình bày giải pháp, hướng tới commitment",
+    "renewal":   "review kết quả hợp tác, đề xuất mở rộng tích hợp, gia hạn hợp đồng",
+}
+
 SYSTEM_PROMPT = """Bạn là trợ lý BD/AM chuyên nghiệp của Zalopay, hỗ trợ chuẩn bị tài liệu cho buổi gặp merchant.
 Nhiệm vụ: Dựa trên thông tin tìm kiếm được, tạo briefing ngắn gọn, thực tế và có thể dùng ngay.
-Viết bằng tiếng Việt, súc tích, dùng bullet points.
-Không bịa đặt thông tin. Nếu không tìm thấy tin tức cụ thể về merchant, nói rõ và tập trung vào ngành.
-Không đề cập đến Zalopay trong nội dung phân tích — chỉ tập trung vào merchant và thị trường."""
+Viết bằng tiếng Việt, súc tích, dùng bullet points. Không bịa đặt thông tin.
+Nếu không tìm thấy tin tức cụ thể về merchant, nói rõ và tập trung vào ngành.
+Phần 1–3: không đề cập đến Zalopay, tập trung vào merchant và thị trường.
+Phần 4–5: được phép đề cập sản phẩm Zalopay.
+
+Danh mục sản phẩm ZaloPay (dùng cho phần Pain Point → Product — chỉ map những gì thực sự phù hợp):
+- ZaloPay Checkout: thanh toán online QR/thẻ/ví, giải quyết checkout drop-off, tăng conversion.
+- ZaloPay QR tại quầy: QR tĩnh/động, thay thế máy POS, thanh toán không tiền mặt tại điểm bán.
+- ZaloPay Disbursement: giải ngân, chi lương, trả hoa hồng đại lý, refund tự động qua API.
+- ZaloPay BNPL / Trả góp 0%: phân kỳ không lãi suất, tăng giá trị giỏ hàng high-ticket.
+- ZaloPay Loyalty & Voucher: co-funding voucher, cashback, tích điểm, giữ chân khách hàng.
+- ZaloPay B2B / Thu-chi hộ: API thu hộ/chi hộ, tự động hóa dòng tiền B2B, quản lý đại lý.
+- ZaloPay Bill Payment: thu hộ định kỳ — điện, nước, học phí, bảo hiểm, phí dịch vụ."""
 
 def build_client():
     from openai import OpenAI
@@ -80,17 +103,21 @@ def web_search(query: str, max_results: int = 4) -> str:
         return f"Loi web search: {exc}"
 
 
-def build_prompt(merchant: str, segment_key: str, search_results: dict) -> str:
+def build_prompt(merchant: str, segment_key: str, deal_stage: str, search_results: dict) -> str:
     segment_label = SEGMENTS.get(segment_key, "Tổng quan")
+    stage_label = DEAL_STAGES.get(deal_stage, "Lần đầu tiếp cận")
+    stage_note = DEAL_STAGE_NOTES.get(deal_stage, "")
     today = datetime.now().strftime("%d/%m/%Y")
 
     news_merchant = search_results.get("news_merchant", "")
     news_industry = search_results.get("news_industry", "")
     news_market = search_results.get("news_market", "")
+    news_competitor = search_results.get("news_competitor", "")
 
     return f"""Ngày: {today}
 Merchant cần gặp: {merchant}
 Segment: {segment_label}
+Giai đoạn deal: {stage_label} — {stage_note}
 
 === TIN TỨC VỀ MERCHANT ===
 {news_merchant}
@@ -101,8 +128,11 @@ Segment: {segment_label}
 === XU HƯỚNG THỊ TRƯỜNG ===
 {news_market}
 
+=== CẠNH TRANH / ĐỐI THỦ ===
+{news_competitor}
+
 ---
-Hãy tạo briefing chuẩn bị cuộc gặp gồm 3 phần:
+Hãy tạo briefing chuẩn bị cuộc gặp gồm 5 phần:
 
 ## 1. Tổng quan về {merchant}
 - Tình hình hiện tại (từ tin tức tìm được)
@@ -110,25 +140,36 @@ Hãy tạo briefing chuẩn bị cuộc gặp gồm 3 phần:
 - Nếu không có tin tức cụ thể, ghi rõ "Chưa tìm thấy tin tức gần đây" và mô tả ngành chung
 
 ## 2. Talking Points (3–5 điểm)
-- Các điểm có thể mở đầu cuộc trò chuyện
+- Các điểm mở đầu cuộc trò chuyện phù hợp với giai đoạn "{stage_label}"
 - Liên kết xu hướng thị trường với nhu cầu của merchant thuộc segment {segment_label}
 - Cụ thể, thực tế, có thể dùng ngay
 
-## 3. Câu hỏi gợi ý để hỏi đối tác (4–6 câu)
-- Câu hỏi khám phá nhu cầu thực tế
-- Câu hỏi về pain points hiện tại
-- Câu hỏi về kế hoạch phát triển
-- Phù hợp với segment {segment_label}"""
+## 3. Câu hỏi gợi ý (4–6 câu)
+- Câu hỏi phù hợp với giai đoạn "{stage_label}": {stage_note}
+- Câu hỏi về pain points hiện tại và kế hoạch phát triển
+- Phù hợp với segment {segment_label}
+
+## 4. Xử lý phản đối thường gặp
+- 3–4 phản đối điển hình của đối tác segment {segment_label} ở giai đoạn "{stage_label}"
+- Dựa trên thông tin tìm được về thị trường và đối thủ cạnh tranh
+- Định dạng mỗi mục: **Phản đối:** [nội dung] → **Phản hồi:** [gợi ý ngắn gọn, kèm số liệu hoặc lợi ích cụ thể nếu có]
+
+## 5. Pain Points → Sản phẩm ZaloPay
+- Xác định 3–4 pain points thực tế của {merchant} dựa trên thông tin tìm được
+- Map mỗi pain point với sản phẩm ZaloPay phù hợp nhất từ danh mục được cung cấp
+- Định dạng mỗi mục: **Pain point:** [mô tả] → **Giải pháp:** [tên sản phẩm] — [lý do phù hợp ngắn gọn]
+- Chỉ map những gì thực sự phù hợp, không liệt kê hết toàn bộ sản phẩm"""
 
 
-def run_meeting_prep(client, model: str, merchant: str, segment: str = "general") -> str:
-    print(f"[INFO] Chuan bi meeting prep cho: {merchant} | segment: {segment}")
+def run_meeting_prep(client, model: str, merchant: str, segment: str = "general", deal_stage: str = "cold") -> str:
+    print(f"[INFO] Chuan bi meeting prep cho: {merchant} | segment: {segment} | stage: {deal_stage}")
 
     focus = SEGMENT_SEARCH_FOCUS.get(segment, "fintech thanh toán")
     queries = {
-        "news_merchant": f"{merchant} tin tức mới nhất 2026",
-        "news_industry": f"{focus} Vietnam xu hướng 2026",
-        "news_market":   f"{merchant} {focus} thị trường Việt Nam 2026",
+        "news_merchant":   f"{merchant} tin tức mới nhất 2026",
+        "news_industry":   f"{focus} Vietnam xu hướng 2026",
+        "news_market":     f"{merchant} {focus} thị trường Việt Nam 2026",
+        "news_competitor": f"{focus} đối thủ cạnh tranh payment Vietnam 2026",
     }
 
     search_results = {}
@@ -136,7 +177,7 @@ def run_meeting_prep(client, model: str, merchant: str, segment: str = "general"
         print(f"[INFO] Searching: {query}")
         search_results[key] = web_search(query, max_results=4)
 
-    user_prompt = build_prompt(merchant, segment, search_results)
+    user_prompt = build_prompt(merchant, segment, deal_stage, search_results)
 
     print("[INFO] Dang tong hop voi LLM...")
     response = client.chat.completions.create(
@@ -146,7 +187,7 @@ def run_meeting_prep(client, model: str, merchant: str, segment: str = "general"
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.4,
-        max_tokens=4000,
+        max_tokens=5000,
     )
     return response.choices[0].message.content or ""
 
@@ -240,6 +281,8 @@ select:focus,input[type=text]:focus{outline:none;border-color:#00CF6A;box-shadow
     <span class="topic-chip">📰 Tin tức merchant</span>
     <span class="topic-chip">💬 Talking points</span>
     <span class="topic-chip">❓ Câu hỏi gợi ý</span>
+    <span class="topic-chip">🛡 Xử lý phản đối</span>
+    <span class="topic-chip">🎯 Pain → Product</span>
   </div>
 </div>
 <div class="container">
@@ -275,6 +318,15 @@ select:focus,input[type=text]:focus{outline:none;border-color:#00CF6A;box-shadow
           </select>
           <div id="segDesc" class="seg-hint">Tổng hợp chung — không giới hạn theo ngành cụ thể</div>
         </div>
+        <div class="field">
+          <label>📍 Giai đoạn deal</label>
+          <select id="dealStage" onchange="updateStageDesc()">
+            <option value="cold">Lần đầu tiếp cận (Cold)</option>
+            <option value="follow_up">Follow-up / Đang đàm phán</option>
+            <option value="renewal">Gia hạn / Upsell</option>
+          </select>
+          <div id="stageDesc" class="seg-hint">Lần đầu tiếp cận — tập trung khám phá, xây dựng trust</div>
+        </div>
       </div>
       <div class="card result-card" id="resultCard">
         <div class="result-top">
@@ -298,6 +350,7 @@ select:focus,input[type=text]:focus{outline:none;border-color:#00CF6A;box-shadow
         <div class="meta-list">
           <div class="meta-item"><div class="meta-dot" id="mDotMerchant"></div><span id="mMerchant">Chưa nhập merchant</span></div>
           <div class="meta-item"><div class="meta-dot on" id="mDotSeg"></div><span id="mSeg">Tổng quan</span></div>
+          <div class="meta-item"><div class="meta-dot on"></div><span id="mStage">Cold</span></div>
         </div>
       </div>
     </div>
@@ -306,13 +359,20 @@ select:focus,input[type=text]:focus{outline:none;border-color:#00CF6A;box-shadow
 <script>
 const SEG_LABEL={'general':'Tổng quan','ecommerce':'E-commerce & Marketplace','retail_fnb':'Chuỗi bán lẻ & F&B','super_app_fintech':'Super App & Fintech','bank_finance':'Ngân hàng & Tổ chức tài chính','intl_merchant':'Merchant quốc tế','telecom_utility':'Viễn thông & Tiện ích','travel_hospitality':'Du lịch & Lữ hành','healthcare_edu':'Y tế & Giáo dục','government_public':'Chính phủ & Dịch vụ công'};
 const SEG_DESC={'general':'Tổng hợp chung — phù hợp khi chưa rõ loại đối tác hoặc muốn góc nhìn rộng','ecommerce':'Shopee, Lazada, Tiki, TikTok Shop — checkout conversion, phí giao dịch, cạnh tranh ví','retail_fnb':'VinMart, Circle K, Highlands, CGV — POS tại quầy, loyalty, tích điểm, off-peak activation','super_app_fintech':'MoMo, VNPay, ShopeePay, Moca — co-branding, API integration, hợp tác hệ sinh thái','bank_finance':'BIDV, VPBank, Techcombank — embedded finance, BNPL, bancassurance, co-lending','intl_merchant':'Google, Apple, Meta Ads, Agoda, Booking — cross-border, local payment acceptance, FCT','telecom_utility':'Viettel, VNPT, EVN, cấp nước/gas — bill payment định kỳ, direct billing, B2B2C','travel_hospitality':'Vietnam Airlines, Bamboo, Vinpearl, OTA — checkout đặt chỗ, BNPL travel, loyalty miles','healthcare_edu':'Bệnh viện, phòng khám, trường học, edtech — học phí/viện phí định kỳ, thanh toán không tiền mặt','government_public':'Cục Thuế, DVCQG, phạt hành chính — Đề án 06, eGov payment, quy định NHNN'};
-const MSGS=['Đang tìm kiếm tin tức về merchant...','Đang phân tích bối cảnh ngành...','Đang tổng hợp xu hướng thị trường...','Đang xây dựng talking points...','Đang soạn câu hỏi gợi ý...','Hoàn thiện briefing, sắp xong...'];
+const DEAL_STAGE_LABEL={'cold':'Cold','follow_up':'Follow-up','renewal':'Renewal'};
+const STAGE_DESC={'cold':'Lần đầu tiếp cận — tập trung khám phá, xây dựng trust, câu hỏi mở về hiện trạng','follow_up':'Đang đàm phán — giải quyết băn khoăn cụ thể, trình bày giải pháp, push commitment','renewal':'Gia hạn / Upsell — review kết quả, đề xuất mở rộng tích hợp, gia hạn hợp đồng'};
+const MSGS=['Đang tìm kiếm tin tức về merchant...','Đang phân tích bối cảnh ngành...','Đang nghiên cứu đối thủ cạnh tranh...','Đang xây dựng talking points...','Đang chuẩn bị objection handling...','Đang mapping pain points → sản phẩm...','Hoàn thiện briefing, sắp xong...'];
 let mdContent='';
 const sl=ms=>new Promise(r=>setTimeout(r,ms));
 function updateSegDesc(){
   const v=document.getElementById('segment').value;
   document.getElementById('segDesc').textContent=SEG_DESC[v]||'';
   document.getElementById('mSeg').textContent=SEG_LABEL[v]||v;
+}
+function updateStageDesc(){
+  const v=document.getElementById('dealStage').value;
+  document.getElementById('stageDesc').textContent=STAGE_DESC[v]||'';
+  document.getElementById('mStage').textContent=DEAL_STAGE_LABEL[v]||v;
 }
 document.getElementById('merchant').addEventListener('input',function(){
   const v=this.value.trim();
@@ -323,33 +383,34 @@ document.getElementById('merchant').addEventListener('input',function(){
 async function runPrep(){
   const merchant=document.getElementById('merchant').value.trim();
   const segment=document.getElementById('segment').value;
+  const dealStage=document.getElementById('dealStage').value;
   if(!merchant){document.getElementById('merchant').focus();showErr('Vui lòng nhập tên merchant.');return}
   const btn=document.getElementById('runBtn'),prog=document.getElementById('progress'),err=document.getElementById('errBox'),rc=document.getElementById('resultCard');
   btn.disabled=true;rc.style.display='none';err.style.display='none';prog.style.display='block';setMsg(0);
   try{
-    const r=await fetch('/invoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({merchant,segment})});
+    const r=await fetch('/invoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({merchant,segment,deal_stage:dealStage})});
     const d=await r.json();
     if(!d.job_id)throw new Error(d.error||'Không nhận được job_id');
-    await poll(d.job_id,merchant,segment);
+    await poll(d.job_id,merchant,segment,dealStage);
   }catch(e){showErr(e.message);prog.style.display='none';btn.disabled=false}
 }
 let msgIdx=0;
 function setMsg(i){msgIdx=i;document.getElementById('pmsg').textContent=MSGS[i%MSGS.length]}
 function showErr(m){const b=document.getElementById('errBox');b.textContent='⚠ '+m;b.style.display='block'}
-async function poll(id,merchant,segment){
+async function poll(id,merchant,segment,dealStage){
   const btn=document.getElementById('runBtn'),prog=document.getElementById('progress');
   let t=0;
   while(true){
     setMsg(t++);await sl(5000);
     const r=await fetch('/result/'+id);const d=await r.json();
-    if(d.status==='done'){prog.style.display='none';btn.disabled=false;showRpt(d.output,merchant,segment);return}
+    if(d.status==='done'){prog.style.display='none';btn.disabled=false;showRpt(d.output,merchant,segment,dealStage);return}
     if(d.status==='error'){prog.style.display='none';showErr(d.output||'Lỗi xử lý');btn.disabled=false;return}
   }
 }
-function showRpt(content,merchant,segment){
+function showRpt(content,merchant,segment,dealStage){
   mdContent=content;
   document.getElementById('rTitle').textContent='Briefing: '+merchant;
-  document.getElementById('rMeta').textContent=(SEG_LABEL[segment]||segment)+' · '+new Date().toLocaleDateString('vi-VN');
+  document.getElementById('rMeta').textContent=(SEG_LABEL[segment]||segment)+' · '+(DEAL_STAGE_LABEL[dealStage]||dealStage)+' · '+new Date().toLocaleDateString('vi-VN');
   document.getElementById('report').innerHTML=marked.parse(content);
   const c=document.getElementById('resultCard');c.style.display='block';
   c.scrollIntoView({behavior:'smooth',block:'start'});
@@ -361,6 +422,7 @@ function dlReport(){
   a.download='briefing_'+merchant.toLowerCase().replace(/\s+/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.md';a.click();
 }
 updateSegDesc();
+updateStageDesc();
 </script>
 </body>
 </html>"""
@@ -404,16 +466,20 @@ def serve(args):
         if segment not in SEGMENTS:
             segment = "general"
 
+        deal_stage = payload.get("deal_stage", "cold") if isinstance(payload, dict) else "cold"
+        if deal_stage not in DEAL_STAGES:
+            deal_stage = "cold"
+
         model = (payload.get("model") if isinstance(payload, dict) else None) or default_model
 
         job_id = str(uuid.uuid4())
-        jobs[job_id] = {"status": "running", "merchant": merchant, "segment": segment, "result": None}
+        jobs[job_id] = {"status": "running", "merchant": merchant, "segment": segment, "deal_stage": deal_stage, "result": None}
 
         loop = asyncio.get_event_loop()
 
         def _run():
             try:
-                report = run_meeting_prep(client, model=model, merchant=merchant, segment=segment)
+                report = run_meeting_prep(client, model=model, merchant=merchant, segment=segment, deal_stage=deal_stage)
                 jobs[job_id]["result"] = report
                 jobs[job_id]["status"] = "done"
             except Exception as e:
@@ -442,6 +508,7 @@ def serve(args):
             "status": job["status"],
             "merchant": job["merchant"],
             "segment": job["segment"],
+            "deal_stage": job.get("deal_stage", "cold"),
             "output": job["result"],
         }
 
@@ -453,6 +520,7 @@ def main():
     parser = argparse.ArgumentParser(description="Meeting Prep Agent — Zalopay BD/AM")
     parser.add_argument("--merchant", type=str, default="", help="Ten merchant can gap")
     parser.add_argument("--segment", type=str, default="general", choices=sorted(SEGMENTS.keys()))
+    parser.add_argument("--deal-stage", type=str, default="cold", choices=sorted(DEAL_STAGES.keys()), dest="deal_stage")
     parser.add_argument("--model", type=str, default=os.environ.get("LLM_MODEL", DEFAULT_MODEL))
     parser.add_argument("--serve", action="store_true", help="Chay web server (FastAPI)")
     args = parser.parse_args()
@@ -462,7 +530,7 @@ def main():
         return
 
     client = build_client()
-    result = run_meeting_prep(client, model=args.model, merchant=args.merchant, segment=args.segment)
+    result = run_meeting_prep(client, model=args.model, merchant=args.merchant, segment=args.segment, deal_stage=args.deal_stage)
     print(result)
 
 
